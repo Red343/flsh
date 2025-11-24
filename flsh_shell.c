@@ -202,6 +202,43 @@ void ejecutar_cp(char *origen, char *destino) {
     close(fd_out);
 }
 
+// --- Función 8: Implementación de cat ---
+void ejecutar_cat(char *archivo) {
+    // 1. Validación
+    if (archivo == NULL) {
+        fprintf(stderr, "mishell: falta el argumento para cat\n");
+        return;
+    }
+
+    // 2. Abrir el archivo
+    // O_RDONLY: Solo lectura
+    int fd = open(archivo, O_RDONLY | O_BINARY); 
+    if (fd < 0) {
+        perror("mishell: cat"); // Error si no existe o no hay permisos
+        return;
+    }
+
+    // 3. Bucle de Lectura y Escritura a Pantalla
+    char buffer[1024]; 
+    ssize_t bytes_leidos;
+
+    // Leemos del archivo...
+    while ((bytes_leidos = read(fd, buffer, sizeof(buffer))) > 0) {
+        // ... y escribimos directamente en el Descriptor 1 (STDOUT/Pantalla)
+        // STDOUT_FILENO es una constante (usualmente 1) definida en unistd.h
+        if (write(STDOUT_FILENO, buffer, bytes_leidos) != bytes_leidos) {
+            perror("mishell: cat (error escribiendo en pantalla)");
+            break;
+        }
+    }
+
+    // 4. Cerrar el archivo (La pantalla NO se cierra)
+    close(fd);
+    
+    // Opcional: Escribir un salto de línea al final por estética si el archivo no termina en \n
+    // write(STDOUT_FILENO, "\n", 1); 
+}
+
 // --- Función Principal: Bucle del Shell ---
 int main() {
     char input[MAX_INPUT_SIZE];
@@ -248,7 +285,12 @@ int main() {
             // args[1] es origen, args[2] es destino
             ejecutar_cp(args[1], args[2]);
         }
-        
+
+        // Comando: cat
+        else if (strcmp(args[0], "cat") == 0) {
+            ejecutar_cat(args[1]);
+        }
+
         // --- Detección de Comandos ---
         
         // 1. Comando Interno: exit
