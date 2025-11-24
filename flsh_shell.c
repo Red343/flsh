@@ -5,6 +5,7 @@
 #include <dirent.h> // Necesario para opendir, readdir, closedir
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 
 #define MAX_INPUT_SIZE 1024
@@ -380,11 +381,29 @@ int main() {
             ejecutar_echo(args);
         }
         
-        // Comando Debug (Temporal para verificar el parser)
+        // Comando Externo
         else {
-            printf("[DEBUG] Comando no reconocido aún: %s\n", args[0]);
-            if (args[1] != NULL) {
-                printf("[DEBUG] Argumento 1: %s\n", args[1]);
+            // Paso A: Ejecución de programas externos
+            pid_t pid = fork();
+
+            if (pid < 0) {
+                // Error al intentar crear el proceso
+                perror("mishell: error en fork");
+            } 
+            else if (pid == 0) {
+                // --- PROCESO HIJO ---
+                // Aquí el hijo se transforma en el comando solicitado (ej: "ls", "vim")
+                // execvp busca el comando en el PATH
+                execvp(args[0], args);
+                
+                // Si execvp retorna, es que hubo un error (ej. comando no encontrado)
+                perror("mishell: comando desconocido o error al ejecutar");
+                exit(EXIT_FAILURE); // Matamos al hijo fallido
+            } 
+            else {
+                // --- PROCESO PADRE (Shell) ---
+                // Esperamos a que el hijo termine
+                wait(NULL); 
             }
         }
 
