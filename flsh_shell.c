@@ -5,6 +5,7 @@
 #include <dirent.h> // Necesario para opendir, readdir, closedir
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <fcntl.h>
 
 #define MAX_INPUT_SIZE 1024
 #define MAX_ARGS 64
@@ -148,6 +149,59 @@ void ejecutar_rm(char *archivo) {
     // Enfoque minimalista: Si funciona, silencio total.
 }
 
+// --- Función 7: Implementación de cp ---
+void ejecutar_cp(char *origen, char *destino) {
+    // 1. Validaciones
+    if (origen == NULL || destino == NULL) {
+        fprintf(stderr, "mishell: cp requiere dos argumentos (origen destino)\n");
+        return;
+    }
+
+    // 2. Abrir archivo Origen
+    // O_RDONLY: Read Only
+    // O_BINARY: Importante para Windows (evita cambios de salto de linea), en Linux se ignora o define como 0
+    #ifndef O_BINARY
+    #define O_BINARY 0
+    #endif
+
+    int fd_in = open(origen, O_RDONLY | O_BINARY);
+    if (fd_in < 0) {
+        perror("mishell: cp (origen)");
+        return;
+    }
+
+    // 3. Abrir/Crear archivo Destino
+    // O_WRONLY: Write Only
+    // O_CREAT: Crear si no existe
+    // O_TRUNC: Si existe, borrar contenido anterior (sobrescribir)
+    // 0644: Permisos rw-r--r-- (Lectura/Escritura dueño, Lectura otros)
+    int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0644);
+    if (fd_out < 0) {
+        perror("mishell: cp (destino)");
+        close(fd_in);
+        return;
+    }
+
+    // 4. Bucle de Copia (Bufferizado)
+    char buffer[1024]; // Leemos de a 1KB
+    ssize_t bytes_leidos;
+
+    // read devuelve la cantidad de bytes leidos. Si es 0, es Fin de Archivo (EOF).
+    while ((bytes_leidos = read(fd_in, buffer, sizeof(buffer))) > 0) {
+        // Escribimos exactamente la cantidad leida
+        ssize_t bytes_escritos = write(fd_out, buffer, bytes_leidos);
+        
+        if (bytes_escritos != bytes_leidos) {
+            perror("mishell: cp (error escritura)");
+            break;
+        }
+    }
+
+    // 5. Cerrar descriptores (Muy importante para liberar recursos)
+    close(fd_in);
+    close(fd_out);
+}
+
 // --- Función Principal: Bucle del Shell ---
 int main() {
     char input[MAX_INPUT_SIZE];
@@ -189,6 +243,12 @@ int main() {
             ejecutar_rm(args[1]);
         }
 
+        // Comando: cp
+        else if (strcmp(args[0], "cp") == 0) {
+            // args[1] es origen, args[2] es destino
+            ejecutar_cp(args[1], args[2]);
+        }
+        
         // --- Detección de Comandos ---
         
         // 1. Comando Interno: exit
