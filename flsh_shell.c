@@ -239,6 +239,23 @@ void ejecutar_cat(char *archivo) {
     // write(STDOUT_FILENO, "\n", 1); 
 }
 
+// --- Función 9: Implementación de echo ---
+void ejecutar_echo(char **args) {
+    // args[0] es "echo", así que empezamos desde args[1]
+    int i = 1;
+    while (args[i] != NULL) {
+        printf("%s", args[i]);
+        
+        // Si hay otro argumento después, imprimimos un espacio para separarlos
+        if (args[i + 1] != NULL) {
+            printf(" ");
+        }
+        i++;
+    }
+    // Al final siempre imprimimos un salto de línea
+    printf("\n");
+}
+
 // --- Función Principal: Bucle del Shell ---
 int main() {
     char input[MAX_INPUT_SIZE];
@@ -291,6 +308,11 @@ int main() {
             ejecutar_cat(args[1]);
         }
 
+        // Comando: echo
+        else if (strcmp(args[0], "echo") == 0) {
+            ejecutar_echo(args);
+        }
+        
         // --- Detección de Comandos ---
         
         // 1. Comando Interno: exit
