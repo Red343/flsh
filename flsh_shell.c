@@ -275,8 +275,75 @@ int main() {
             continue;
         }
 
+        // --- MANEJO DE REDIRECCIÓN (Minimalista) ---
+        int stdout_backup = -1; // Variable para guardar la pantalla original
+        int fd_archivo = -1;
+        int redir_pos = -1;
+
+        // Buscamos el símbolo ">" en los argumentos
+        for (int k = 0; args[k] != NULL; k++) {
+            if (strcmp(args[k], ">") == 0) {
+                redir_pos = k;
+                break;
+            }
+        }
+
+        // 2. Si encontramos ">", configuramos la redirección
+        if (redir_pos != -1) {
+            // Verificamos que haya un nombre de archivo después del ">"
+            if (args[redir_pos + 1] == NULL) {
+                fprintf(stderr, "mishell: error de sintaxis cerca de >\n");
+                continue; // Saltamos a la siguiente iteración del while
+            }
+
+            char *archivo_destino = args[redir_pos + 1];
+
+            // A. Guardamos el STDOUT actual (usualmente la pantalla)
+            // dup() duplica el descriptor 1 en un lugar seguro
+            stdout_backup = dup(STDOUT_FILENO);
+
+            // B. Abrimos el archivo destino
+            // O_WRONLY | O_CREAT | O_TRUNC: Escribir, Crear si no existe, Borrar contenido previo
+            fd_archivo = open(archivo_destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd_archivo < 0) {
+                perror("mishell: error al abrir archivo de redirección");
+                continue;
+            }
+
+            // C. El Gran Truco: dup2
+            // Reemplazamos STDOUT (1) con nuestro archivo
+            if (dup2(fd_archivo, STDOUT_FILENO) < 0) {
+                perror("mishell: error en dup2");
+                close(fd_archivo);
+                continue;
+            }
+            // Ya no necesitamos el fd_archivo original porque está duplicado en el 1
+            close(fd_archivo); 
+
+            // D. Limpiamos los argumentos para que el comando no vea el "> archivo"
+            // Ejemplo: transforma ["echo", "hola", ">", "file"] en ["echo", "hola", NULL]
+            args[redir_pos] = NULL;
+        }
+
+        // 1. Comando Interno: exit
+        if (strcmp(args[0], "exit") == 0) {
+            // TODO: Agregar log obligatorio aquí [cite: 99]
+            break;
+        }
+        
+         // 2. --- Detección de Comandos ---
+        
+        //Comando Interno: pwd (obligatorio [cite: 94])
+        // Al ser minimalista, pwd es simplemente imprimir el getcwd
+        else if (strcmp(args[0], "pwd") == 0) {
+            char cwd[1024];
+            if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                printf("%s\n", cwd);
+            }
+        }
+
         // Comando: ls
-        if (strcmp(args[0], "ls") == 0) {
+        else if (strcmp(args[0], "ls") == 0) {
             // args[1] contiene la ruta (si el usuario la escribió) o NULL
             ejecutar_ls(args[1]);
         }
@@ -313,29 +380,26 @@ int main() {
             ejecutar_echo(args);
         }
         
-        // --- Detección de Comandos ---
-        
-        // 1. Comando Interno: exit
-        else if (strcmp(args[0], "exit") == 0) {
-            // TODO: Agregar log obligatorio aquí [cite: 99]
-            break;
-        }
-        
-        // 2. Comando Interno: pwd (obligatorio [cite: 94])
-        // Al ser minimalista, pwd es simplemente imprimir el getcwd
-        else if (strcmp(args[0], "pwd") == 0) {
-            char cwd[1024];
-            if (getcwd(cwd, sizeof(cwd)) != NULL) {
-                printf("%s\n", cwd);
-            }
-        }
-        
-        // 3. Comando Debug (Temporal para verificar el parser)
+        // Comando Debug (Temporal para verificar el parser)
         else {
             printf("[DEBUG] Comando no reconocido aún: %s\n", args[0]);
             if (args[1] != NULL) {
                 printf("[DEBUG] Argumento 1: %s\n", args[1]);
             }
+        }
+
+        // --- RESTAURACIÓN DE STDOUT ---
+        // 3. Si hubo redirección, debemos volver a conectar la pantalla
+        if (stdout_backup != -1) {
+            
+            // ¡CORRECCIÓN CRÍTICA!
+            // Forzamos a que todo lo que quedó en el buffer se escriba
+            // en el archivo ANTES de volver a conectar la pantalla.
+            fflush(stdout); 
+            
+            // Restauramos el 1 con la copia que guardamos
+            dup2(stdout_backup, STDOUT_FILENO);
+            close(stdout_backup); // Cerramos la copia de respaldo
         }
     }
 
