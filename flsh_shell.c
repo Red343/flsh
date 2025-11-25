@@ -289,6 +289,59 @@ void ejecutar_echo(char **args) {
     log_shell("echo", "Exito: Texto impreso", 0);
 }
 
+// --- Función Opcional: Implementación de grep (2 ptos extra) ---
+void ejecutar_grep(char *patron, char *archivo) {
+    // 1. Validación de argumentos
+    if (patron == NULL || archivo == NULL) {
+        fprintf(stderr, "mishell: uso grep <palabra> <archivo>\n");
+        log_shell("grep", "Error: Argumentos insuficientes", 1);
+        return;
+    }
+
+    // 2. Abrir archivo en modo texto
+    // Usamos fopen/fgets aquí porque leer línea por línea con 'read' (syscall pura)
+    // requiere implementar un buffer complejo manualmente. fopen es estándar C.
+    FILE *fp = fopen(archivo, "r");
+    if (fp == NULL) {
+        perror("mishell: grep");
+        log_shell("grep", "Fallo: No se pudo abrir el archivo", 1);
+        return;
+    }
+
+    char linea[1024];
+    int coincidencias = 0;
+    int num_linea = 0;
+
+    // 3. Leer línea por línea
+    while (fgets(linea, sizeof(linea), fp) != NULL) {
+        num_linea++;
+        
+        // 4. Buscar el patrón en la línea actual
+        // strstr devuelve un puntero si encuentra el texto, o NULL si no.
+        if (strstr(linea, patron) != NULL) {
+            // Imprimimos el número de línea (detalle pro) y el contenido
+            printf("%d: %s", num_linea, linea);
+            
+            // Si la línea no terminaba en \n (última línea del archivo), lo agregamos
+            if (linea[strlen(linea) - 1] != '\n') {
+                printf("\n");
+            }
+            coincidencias++;
+        }
+    }
+
+    fclose(fp);
+
+    // 5. Loguear resultado
+    char msg[256];
+    if (coincidencias > 0) {
+        snprintf(msg, sizeof(msg), "Exito: Encontradas %d coincidencias en %s", coincidencias, archivo);
+    } else {
+        snprintf(msg, sizeof(msg), "Info: Sin coincidencias para '%s' en %s", patron, archivo);
+    }
+    log_shell("grep", msg, 0);
+}
+
 // --- MAIN ---
 int main() {
         char input[MAX_INPUT_SIZE];
@@ -367,6 +420,13 @@ int main() {
         else if (strcmp(args[0], "cp") == 0) ejecutar_cp(args[1], args[2]);
         else if (strcmp(args[0], "cat") == 0) ejecutar_cat(args[1]);
         else if (strcmp(args[0], "echo") == 0) ejecutar_echo(args);
+
+        // --- NUEVO COMANDO GREP ---
+        else if (strcmp(args[0], "grep") == 0) {
+            // args[1] es el patrón, args[2] es el archivo
+            ejecutar_grep(args[1], args[2]);
+        }
+        
         else {
             // Comandos Externos
             pid_t pid = fork();
