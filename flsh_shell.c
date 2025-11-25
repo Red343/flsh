@@ -2,21 +2,92 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <dirent.h> // Necesario para opendir, readdir, closedir
+#include <dirent.h>
+#include <time.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <libgen.h>
+#include <errno.h> // Necesario para identificar errores exactos
 
 #define MAX_INPUT_SIZE 1024
 #define MAX_ARGS 64
-#define DELIMITADORES " \t\r\n\a" // Espacios, tabs, saltos de línea
+#define DELIMITADORES " \t\r\n\a"
 
-// --- Función 1: Prompt Minimalista ---
+// --- Prototipos para evitar warnings ---
+void log_shell(char *cmd, char *detalles, int es_error);
+// --- Función Auxiliar: Obtener Ruta de Logs ---
+// Modificada para apuntar a /var/log/flsh
+void obtener_ruta_logs(char *ruta_destino, size_t tamano) {
+    // Definimos la ruta fija solicitada
+    const char *ruta_fija = "/var/log/flsh";
+    
+    // Verificamos si tenemos acceso de escritura a esa ruta
+    if (access(ruta_fija, W_OK) == 0) {
+        // Si tenemos permiso, usamos la ruta del sistema
+        snprintf(ruta_destino, tamano, "%s", ruta_fija);
+    } else {
+        // FALLBACK: Si no tenemos permisos en /var/log/flsh (no hiciste el sudo),
+        // usamos una carpeta local para evitar que el programa falle.
+        // Esto es una medida de seguridad "defensiva".
+        fprintf(stderr, "[DEBUG] No hay permiso en %s. Usando ./logs local.\n", ruta_fija);
+        
+        // Obtenemos ruta local como plan B
+        char ruta_exe[PATH_MAX];
+        ssize_t len = readlink("/proc/self/exe", ruta_exe, sizeof(ruta_exe) - 1);
+        if (len != -1) {
+            ruta_exe[len] = '\0';
+            char *dir = dirname(ruta_exe);
+            snprintf(ruta_destino, tamano, "%s/logs", dir);
+        } else {
+            snprintf(ruta_destino, tamano, "./logs");
+        }
+    }
+}
+
+// --- Función de Logging (Ajustada) ---
+void log_shell(char *cmd, char *detalles, int es_error) {
+    char directorio_logs[PATH_MAX];
+    char ruta_archivo[PATH_MAX];
+    
+    // 1. Obtener la ruta (/var/log/flsh o fallback local)
+    obtener_ruta_logs(directorio_logs, sizeof(directorio_logs));
+    
+    // 2. Intentar asegurar que existe (por si usas el fallback local)
+    // Nota: mkdir en /var/log fallará si no eres root, pero el access check de arriba lo maneja
+    mkdir(directorio_logs, 0777); 
+
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    char fecha[64];
+    strftime(fecha, sizeof(fecha), "%Y-%m-%d %H:%M:%S", tm);
+
+    // 3. Definir nombre de archivo según PDF (shell.log o sistema_error.log)
+    if (es_error) {
+        snprintf(ruta_archivo, sizeof(ruta_archivo), "%s/sistema_error.log", directorio_logs);
+    } else {
+        snprintf(ruta_archivo, sizeof(ruta_archivo), "%s/shell.log", directorio_logs);
+    }
+
+    FILE *f = fopen(ruta_archivo, "a"); 
+    if (f == NULL) {
+        // Si falla aquí, es un error crítico de permisos que no pudimos evitar
+        perror("mishell: Error fatal escribiendo log");
+        return; 
+    }
+
+    char *usuario = getenv("USER");
+    if (usuario == NULL) usuario = "unknown";
+
+    fprintf(f, "[%s] User: %s | Cmd: %s | Detalles: %s\n", fecha, usuario, cmd, detalles);
+    fclose(f);
+}
+
+// --- Función 1: Prompt ---
 void imprimir_prompt() {
     char cwd[1024];
-    // Enfoque Minimalista: Solo mostramos el directorio actual y un símbolo ">"
-    // Si hay error obteniendo el path, mostramos solo ">"
     if (getcwd(cwd, sizeof(cwd)) != NULL) {
         printf("[%s]> ", cwd);
     } else {
@@ -25,263 +96,233 @@ void imprimir_prompt() {
     fflush(stdout);
 }
 
-// --- Función 2: Parseo de línea (Tokenización) ---
-// Transforma: "ls -l" -> ["ls", "-l", NULL]
-// Retorna: Cantidad de argumentos encontrados
+// --- Función 2: Parseo ---
 int parsear_comando(char *input, char **args) {
     int i = 0;
-    char *token = strtok(input, DELIMITADORES); // 
-
+    char *token = strtok(input, DELIMITADORES);
     while (token != NULL && i < MAX_ARGS - 1) {
         args[i] = token;
         i++;
         token = strtok(NULL, DELIMITADORES);
     }
-    args[i] = NULL; // La lista de argumentos debe terminar en NULL para execvp
-    return i; // Retornamos la cantidad de argumentos
+    args[i] = NULL;
+    return i;
 }
 
-// --- Función 3: Implementación de ls propio ---
+// --- Función 3: LS ---
 void ejecutar_ls(char *ruta) {
-    // Si no se especifica ruta, usamos el directorio actual "."
-    if (ruta == NULL) {
-        ruta = ".";
-    }
-
-    DIR *d = opendir(ruta); // Intenta abrir el directorio
+    char *target = (ruta == NULL) ? "." : ruta;
+    DIR *d = opendir(target);
     
     if (d == NULL) {
-        // Enfoque minimalista: Error breve pero claro
-        // perror imprime el error del sistema (ej: "No such file or directory")
-        perror("mishell: ls"); 
+        perror("mishell: ls");
+        log_shell("ls", "Fallo: Directorio no encontrado o sin permisos", 1);
         return;
     }
 
     struct dirent *dir;
-    // Leemos entrada por entrada hasta que readdir devuelva NULL (fin del directorio)
     while ((dir = readdir(d)) != NULL) {
-        // Opcional: Omitir archivos ocultos (los que empiezan con punto)
         if (dir->d_name[0] != '.') {
              printf("%s  ", dir->d_name);
         }
     }
-    printf("\n"); // Salto de línea final para que el prompt no quede pegado
-
-    closedir(d); // IMPORTANTE: Siempre cerrar lo que se abre
+    printf("\n");
+    closedir(d);
+    
+    // Registro de éxito
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Exito: Listado directorio %s", target);
+    log_shell("ls", msg, 0);
 }
 
-// --- Función 4: Implementación de cd (Corregida para Windows/Linux) ---
+// --- Función 4: CD ---
 void ejecutar_cd(char *ruta) {
-    // 1. Manejo de argumento vacío (ir a HOME)
-    if (ruta == NULL) {
-        ruta = getenv("HOME");
-        if (ruta == NULL) {
+    char *target = ruta;
+    if (target == NULL) {
+        target = getenv("HOME");
+        if (target == NULL) {
             fprintf(stderr, "mishell: variable HOME no definida\n");
+            log_shell("cd", "Error: Variable HOME no definida", 1);
             return;
         }
     }
 
-    // 2. Llamada al sistema chdir
-    if (chdir(ruta) != 0) {
+    if (chdir(target) != 0) {
         perror("mishell: cd");
+        log_shell("cd", "Fallo: Ruta invalida", 1);
     } else {
-        // 3. Actualización de variable de entorno
+        // Actualizar PWD
         char cwd[1024];
         if (getcwd(cwd, sizeof(cwd)) != NULL) {
-            // ERROR ANTERIOR: setenv("PWD", cwd, 1);
-            
-            // SOLUCIÓN COMPATIBLE (Windows/Linux):
-            // putenv requiere el formato "VARIABLE=valor"
-            // Usamos una variable estática para que la memoria persista
-            // (putenv a veces guarda el puntero, no una copia)
             static char env_var[1200]; 
             sprintf(env_var, "PWD=%s", cwd);
             putenv(env_var);
         }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Exito: Cambio a %s", target);
+        log_shell("cd", msg, 0);
     }
 }
 
-// --- Función 5: Implementación de mkdir ---
+// --- Función 5: MKDIR ---
 void ejecutar_mkdir(char *ruta) {
-    // 1. Validación básica
     if (ruta == NULL) {
-        fprintf(stderr, "mishell: falta el argumento para mkdir\n");
+        fprintf(stderr, "mishell: falta argumento mkdir\n");
+        log_shell("mkdir", "Error: Falta argumento", 1);
         return;
     }
 
-    int resultado;
-
-    // 2. Llamada al sistema (Diferenciada por SO)
-    #ifdef _WIN32
-        // En Windows, mkdir solo recibe el nombre
-        resultado = mkdir(ruta);
-    #else
-        // En Linux, mkdir recibe nombre + permisos (0755 es el estándar: rwx r-x r-x)
-        resultado = mkdir(ruta, 0755);
-    #endif
-
-    // 3. Manejo de errores
-    if (resultado != 0) {
-        // Esto cubrirá casos como: carpeta ya existe, ruta inválida, sin permisos
+    if (mkdir(ruta, 0755) != 0) {
         perror("mishell: mkdir");
+        log_shell("mkdir", "Fallo: No se pudo crear directorio", 1);
+    } else {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Exito: Directorio %s creado", ruta);
+        log_shell("mkdir", msg, 0);
     }
-    // Enfoque minimalista: Si tiene éxito, no imprimimos nada (silencio unix)
 }
 
-// --- Función 6: Implementación de rm ---
+// --- Función 6: RM ---
 void ejecutar_rm(char *archivo) {
-    // 1. Validación de argumentos
     if (archivo == NULL) {
-        fprintf(stderr, "mishell: falta el argumento para rm\n");
+        fprintf(stderr, "mishell: falta argumento rm\n");
+        log_shell("rm", "Error: Falta argumento", 1);
         return;
     }
-
-    // 2. Llamada al sistema unlink
-    // unlink elimina la entrada del directorio. Si era el último enlace, libera el espacio.
-    // NOTA: En Windows, unlink a veces se llama _unlink, pero muchos compiladores
-    // modernos lo aceptan o puedes usar remove() de <stdio.h> que es estándar C.
-    // Para este TP, usaremos unlink por ser la syscall POSIX pedida.
     
+    // PDF Pág 3: verificar y eliminar manualmente
     if (unlink(archivo) != 0) {
-        // Manejo de errores estándar (archivo no existe, sin permisos, es un directorio)
         perror("mishell: rm");
+        // PDF Pág 3 (Punto 81): Casos a contemplar: archivo inexistente -> registrar en sistema_error.log
+        log_shell("rm", "Fallo: No se pudo eliminar (inexistente o permisos)", 1);
+    } else {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Exito: Archivo %s eliminado", archivo);
+        log_shell("rm", msg, 0);
     }
-    
-    // Enfoque minimalista: Si funciona, silencio total.
 }
 
-// --- Función 7: Implementación de cp ---
+// --- Función 7: CP ---
 void ejecutar_cp(char *origen, char *destino) {
-    // 1. Validaciones
     if (origen == NULL || destino == NULL) {
-        fprintf(stderr, "mishell: cp requiere dos argumentos (origen destino)\n");
+        fprintf(stderr, "mishell: uso cp <origen> <destino>\n");
+        log_shell("cp", "Error: Argumentos insuficientes", 1);
         return;
     }
 
-    // 2. Abrir archivo Origen
-    // O_RDONLY: Read Only
-    // O_BINARY: Importante para Windows (evita cambios de salto de linea), en Linux se ignora o define como 0
-    #ifndef O_BINARY
-    #define O_BINARY 0
-    #endif
-
-    int fd_in = open(origen, O_RDONLY | O_BINARY);
+    int fd_in = open(origen, O_RDONLY);
     if (fd_in < 0) {
         perror("mishell: cp (origen)");
+        log_shell("cp", "Fallo: No se pudo abrir origen", 1);
         return;
     }
 
-    // 3. Abrir/Crear archivo Destino
-    // O_WRONLY: Write Only
-    // O_CREAT: Crear si no existe
-    // O_TRUNC: Si existe, borrar contenido anterior (sobrescribir)
-    // 0644: Permisos rw-r--r-- (Lectura/Escritura dueño, Lectura otros)
-    int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0644);
+    int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0) {
         perror("mishell: cp (destino)");
         close(fd_in);
+        log_shell("cp", "Fallo: No se pudo crear destino", 1);
         return;
     }
 
-    // 4. Bucle de Copia (Bufferizado)
-    char buffer[1024]; // Leemos de a 1KB
+    char buffer[1024];
     ssize_t bytes_leidos;
+    int error_escritura = 0;
 
-    // read devuelve la cantidad de bytes leidos. Si es 0, es Fin de Archivo (EOF).
     while ((bytes_leidos = read(fd_in, buffer, sizeof(buffer))) > 0) {
-        // Escribimos exactamente la cantidad leida
-        ssize_t bytes_escritos = write(fd_out, buffer, bytes_leidos);
-        
-        if (bytes_escritos != bytes_leidos) {
+        if (write(fd_out, buffer, bytes_leidos) != bytes_leidos) {
             perror("mishell: cp (error escritura)");
+            error_escritura = 1;
             break;
         }
     }
 
-    // 5. Cerrar descriptores (Muy importante para liberar recursos)
     close(fd_in);
     close(fd_out);
+
+    if (error_escritura) {
+        log_shell("cp", "Fallo: Error durante la escritura", 1);
+    } else {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Exito: Copiado %s a %s", origen, destino);
+        log_shell("cp", msg, 0);
+    }
 }
 
-// --- Función 8: Implementación de cat ---
+// --- Función 8: CAT ---
 void ejecutar_cat(char *archivo) {
-    // 1. Validación
     if (archivo == NULL) {
-        fprintf(stderr, "mishell: falta el argumento para cat\n");
+        fprintf(stderr, "mishell: falta argumento cat\n");
+        log_shell("cat", "Error: Falta argumento", 1);
         return;
     }
 
-    // 2. Abrir el archivo
-    // O_RDONLY: Solo lectura
-    int fd = open(archivo, O_RDONLY | O_BINARY); 
+    int fd = open(archivo, O_RDONLY); 
     if (fd < 0) {
-        perror("mishell: cat"); // Error si no existe o no hay permisos
+        perror("mishell: cat");
+        log_shell("cat", "Fallo: Archivo no encontrado o sin permisos", 1);
         return;
     }
 
-    // 3. Bucle de Lectura y Escritura a Pantalla
     char buffer[1024]; 
     ssize_t bytes_leidos;
-
-    // Leemos del archivo...
     while ((bytes_leidos = read(fd, buffer, sizeof(buffer))) > 0) {
-        // ... y escribimos directamente en el Descriptor 1 (STDOUT/Pantalla)
-        // STDOUT_FILENO es una constante (usualmente 1) definida en unistd.h
-        if (write(STDOUT_FILENO, buffer, bytes_leidos) != bytes_leidos) {
-            perror("mishell: cat (error escribiendo en pantalla)");
-            break;
-        }
+        write(STDOUT_FILENO, buffer, bytes_leidos);
     }
-
-    // 4. Cerrar el archivo (La pantalla NO se cierra)
     close(fd);
     
-    // Opcional: Escribir un salto de línea al final por estética si el archivo no termina en \n
-    // write(STDOUT_FILENO, "\n", 1); 
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Exito: Leido %s", archivo);
+    log_shell("cat", msg, 0);
 }
 
-// --- Función 9: Implementación de echo ---
+// --- Función 9: ECHO ---
 void ejecutar_echo(char **args) {
-    // args[0] es "echo", así que empezamos desde args[1]
     int i = 1;
     while (args[i] != NULL) {
         printf("%s", args[i]);
-        
-        // Si hay otro argumento después, imprimimos un espacio para separarlos
-        if (args[i + 1] != NULL) {
-            printf(" ");
-        }
+        if (args[i + 1] != NULL) printf(" ");
         i++;
     }
-    // Al final siempre imprimimos un salto de línea
     printf("\n");
+    // echo siempre suele tener éxito a menos que falle stdout, lo logueamos como éxito
+    log_shell("echo", "Exito: Texto impreso", 0);
 }
 
-// --- Función Principal: Bucle del Shell ---
+// --- MAIN ---
 int main() {
-    char input[MAX_INPUT_SIZE];
-    char *args[MAX_ARGS]; // Array de punteros para los argumentos
+        char input[MAX_INPUT_SIZE];
+    char *args[MAX_ARGS];
 
+    // Verificar logs al inicio
+    char ruta_logs[PATH_MAX];
+    obtener_ruta_logs(ruta_logs, sizeof(ruta_logs));
+    
+    // Mensaje informativo al arrancar
+    printf("--- Shell Iniciada ---\n");
+    printf("Logs configurados en: %s\n", ruta_logs);
+    
     while (1) {
         imprimir_prompt();
 
         if (fgets(input, MAX_INPUT_SIZE, stdin) == NULL) {
             printf("\n");
-            break; // Salida limpia con CTRL+D
+            break; 
         }
 
-        // Paso de Parseo
-        // Si el usuario solo dio Enter, args[0] será NULL
+        // Eliminar el salto de línea al final si existe
+        size_t len = strlen(input);
+        if (len > 0 && input[len-1] == '\n') {
+            input[len-1] = '\0';
+        }
+
         if (parsear_comando(input, args) == 0) {
             continue;
         }
 
-        // --- MANEJO DE REDIRECCIÓN (Minimalista) ---
-        int stdout_backup = -1; // Variable para guardar la pantalla original
-        int fd_archivo = -1;
+        // --- MANEJO DE REDIRECCIÓN (Simplificado) ---
+        int stdout_backup = -1;
         int redir_pos = -1;
-
-        // Buscamos el símbolo ">" en los argumentos
         for (int k = 0; args[k] != NULL; k++) {
             if (strcmp(args[k], ">") == 0) {
                 redir_pos = k;
@@ -289,136 +330,76 @@ int main() {
             }
         }
 
-        // 2. Si encontramos ">", configuramos la redirección
         if (redir_pos != -1) {
-            // Verificamos que haya un nombre de archivo después del ">"
             if (args[redir_pos + 1] == NULL) {
                 fprintf(stderr, "mishell: error de sintaxis cerca de >\n");
-                continue; // Saltamos a la siguiente iteración del while
+                continue; 
             }
-
             char *archivo_destino = args[redir_pos + 1];
-
-            // A. Guardamos el STDOUT actual (usualmente la pantalla)
-            // dup() duplica el descriptor 1 en un lugar seguro
             stdout_backup = dup(STDOUT_FILENO);
-
-            // B. Abrimos el archivo destino
-            // O_WRONLY | O_CREAT | O_TRUNC: Escribir, Crear si no existe, Borrar contenido previo
-            fd_archivo = open(archivo_destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd_archivo = open(archivo_destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd_archivo < 0) {
-                perror("mishell: error al abrir archivo de redirección");
+                perror("mishell: error redireccion");
                 continue;
             }
-
-            // C. El Gran Truco: dup2
-            // Reemplazamos STDOUT (1) con nuestro archivo
-            if (dup2(fd_archivo, STDOUT_FILENO) < 0) {
-                perror("mishell: error en dup2");
-                close(fd_archivo);
-                continue;
-            }
-            // Ya no necesitamos el fd_archivo original porque está duplicado en el 1
-            close(fd_archivo); 
-
-            // D. Limpiamos los argumentos para que el comando no vea el "> archivo"
-            // Ejemplo: transforma ["echo", "hola", ">", "file"] en ["echo", "hola", NULL]
-            args[redir_pos] = NULL;
+            dup2(fd_archivo, STDOUT_FILENO);
+            close(fd_archivo);
+            args[redir_pos] = NULL; // Cortar argumentos
         }
 
-        // 1. Comando Interno: exit
+        // --- EJECUCIÓN ---
+
         if (strcmp(args[0], "exit") == 0) {
-            // TODO: Agregar log obligatorio aquí [cite: 99]
+            log_shell("exit", "Exito: Shell cerrada por usuario", 0);
             break;
         }
-        
-         // 2. --- Detección de Comandos ---
-        
-        //Comando Interno: pwd (obligatorio [cite: 94])
-        // Al ser minimalista, pwd es simplemente imprimir el getcwd
         else if (strcmp(args[0], "pwd") == 0) {
             char cwd[1024];
             if (getcwd(cwd, sizeof(cwd)) != NULL) {
                 printf("%s\n", cwd);
+                log_shell("pwd", "Exito", 0);
             }
         }
-
-        // Comando: ls
-        else if (strcmp(args[0], "ls") == 0) {
-            // args[1] contiene la ruta (si el usuario la escribió) o NULL
-            ejecutar_ls(args[1]);
-        }
-        
-        // Comando: cd
-        else if (strcmp(args[0], "cd") == 0) {
-            // args[1] es la ruta destino (o NULL)
-            ejecutar_cd(args[1]);
-        }
-
-        // Comando: mkdir
-        else if (strcmp(args[0], "mkdir") == 0) {
-            ejecutar_mkdir(args[1]);
-        }
-
-        // Comando: rm
-        else if (strcmp(args[0], "rm") == 0) {
-            ejecutar_rm(args[1]);
-        }
-
-        // Comando: cp
-        else if (strcmp(args[0], "cp") == 0) {
-            // args[1] es origen, args[2] es destino
-            ejecutar_cp(args[1], args[2]);
-        }
-
-        // Comando: cat
-        else if (strcmp(args[0], "cat") == 0) {
-            ejecutar_cat(args[1]);
-        }
-
-        // Comando: echo
-        else if (strcmp(args[0], "echo") == 0) {
-            ejecutar_echo(args);
-        }
-        
-        // Comando Externo
+        else if (strcmp(args[0], "ls") == 0) ejecutar_ls(args[1]);
+        else if (strcmp(args[0], "cd") == 0) ejecutar_cd(args[1]);
+        else if (strcmp(args[0], "mkdir") == 0) ejecutar_mkdir(args[1]);
+        else if (strcmp(args[0], "rm") == 0) ejecutar_rm(args[1]);
+        else if (strcmp(args[0], "cp") == 0) ejecutar_cp(args[1], args[2]);
+        else if (strcmp(args[0], "cat") == 0) ejecutar_cat(args[1]);
+        else if (strcmp(args[0], "echo") == 0) ejecutar_echo(args);
         else {
-            // Paso A: Ejecución de programas externos
+            // Comandos Externos
             pid_t pid = fork();
-
             if (pid < 0) {
-                // Error al intentar crear el proceso
-                perror("mishell: error en fork");
+                perror("mishell: fork");
             } 
             else if (pid == 0) {
-                // --- PROCESO HIJO ---
-                // Aquí el hijo se transforma en el comando solicitado (ej: "ls", "vim")
-                // execvp busca el comando en el PATH
                 execvp(args[0], args);
-                
-                // Si execvp retorna, es que hubo un error (ej. comando no encontrado)
-                perror("mishell: comando desconocido o error al ejecutar");
-                exit(EXIT_FAILURE); // Matamos al hijo fallido
+                // Si llega aqui, falló
+                perror("mishell: execvp");
+                // Importante: No podemos usar log_shell aquí de forma segura si el padre también escribe, 
+                // pero para este TP simple es aceptable o el padre puede detectar el fallo via wait status.
+                // Sin embargo, como el hijo muere, intentamos escribir antes de morir:
+                log_shell(args[0], "Fallo: Comando externo no encontrado", 1);
+                exit(EXIT_FAILURE); 
             } 
             else {
-                // --- PROCESO PADRE (Shell) ---
-                // Esperamos a que el hijo termine
-                wait(NULL); 
+                int status;
+                wait(&status);
+                // Opcional: Loguear ejecución externa en el padre
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                     log_shell(args[0], "Exito: Comando externo ejecutado", 0);
+                } else {
+                     log_shell(args[0], "Fallo: Error en comando externo", 1);
+                }
             }
         }
 
-        // --- RESTAURACIÓN DE STDOUT ---
-        // 3. Si hubo redirección, debemos volver a conectar la pantalla
+        // Restaurar salida
         if (stdout_backup != -1) {
-            
-            // ¡CORRECCIÓN CRÍTICA!
-            // Forzamos a que todo lo que quedó en el buffer se escriba
-            // en el archivo ANTES de volver a conectar la pantalla.
-            fflush(stdout); 
-            
-            // Restauramos el 1 con la copia que guardamos
+            fflush(stdout);
             dup2(stdout_backup, STDOUT_FILENO);
-            close(stdout_backup); // Cerramos la copia de respaldo
+            close(stdout_backup);
         }
     }
 
