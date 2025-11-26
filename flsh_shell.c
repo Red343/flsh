@@ -74,7 +74,7 @@ void log_shell(char *cmd, char *detalles, int es_error) {
     FILE *f = fopen(ruta_archivo, "a"); 
     if (f == NULL) {
         // Si falla aquí, es un error crítico de permisos que no pudimos evitar
-        perror("mishell: Error fatal escribiendo log");
+        perror("[flsh_error]: Error fatal escribiendo log");
         return; 
     }
 
@@ -85,13 +85,13 @@ void log_shell(char *cmd, char *detalles, int es_error) {
     fclose(f);
 }
 
-// --- NUEVA FUNCIÓN DE SEGURIDAD (JAIL/SANDBOX) ---
+// --- NUEVA FUNCIÓN DE SEGURIDAD (SANDBOX) ---
 // Retorna 1 si es seguro proceder, 0 si hay violación de seguridad.
 int validar_entorno_seguro(char *ruta_objetivo, const char *comando) {
     char *home = getenv("HOME");
     if (home == NULL) {
         log_shell((char*)comando, "SEGURIDAD: Variable HOME no definida", 1);
-        fprintf(stderr, "mishell: Variable HOME no definida (ambiente inseguro)\n");
+        fprintf(stderr, "[flsh_error]: Variable HOME no definida (ambiente inseguro)\n");
         return 0;
     }
  
@@ -120,7 +120,7 @@ int validar_entorno_seguro(char *ruta_objetivo, const char *comando) {
         char msg[512];
         snprintf(msg, sizeof(msg), "SEGURIDAD: Ruta invalida o fuera de limites: %s", ruta_objetivo);
         log_shell((char*)comando, msg, 1);
-        fprintf(stderr, "mishell: Acceso denegado (Jail). Ruta invalida o fuera de %s\n", home);
+        fprintf(stderr, "[flsh_error]: Acceso denegado (SandBox). Ruta invalida o fuera de %s\n", home);
         return 0;
     }
  
@@ -130,7 +130,7 @@ int validar_entorno_seguro(char *ruta_objetivo, const char *comando) {
         char msg[512];
         snprintf(msg, sizeof(msg), "SEGURIDAD: Intento de escape de HOME hacia %s", ruta_resuelta);
         log_shell((char*)comando, msg, 1);
-        fprintf(stderr, "mishell: Acceso denegado (Jail). No puedes salir de %s\n", home);
+        fprintf(stderr, "[flsh_error]: Acceso denegado (SandBox). No puedes salir de %s\n", home);
         return 0;
     }
  
@@ -142,7 +142,7 @@ void imprimir_prompt() {
     char cwd[1024];
     if (getcwd(cwd, sizeof(cwd)) != NULL) {
         // Indicamos visualmente que estamos en entorno seguro
-        printf("[SANDBOX:%s]> ", cwd); 
+        printf("[sandbox.flsh:%s]> ", cwd); 
     } else {
         printf("> ");
     }
@@ -174,7 +174,7 @@ void ejecutar_ls(char *ruta) {
     DIR *d = opendir(target);
     
     if (d == NULL) {
-        perror("mishell: ls");
+        perror("[flsh_error]: ls");
         log_shell("ls", "Fallo: Directorio no encontrado o sin permisos", 1);
         return;
     }
@@ -200,11 +200,11 @@ void ejecutar_cd(char *ruta) {
  
     char *objetivo = (ruta == NULL) ? home : ruta;
  
-    // Validación JAIL centralizada
+    // Validación SandBox centralizada
     if (!validar_entorno_seguro(objetivo, "cd")) return;
  
     if (chdir(objetivo) != 0) {
-        perror("mishell: cd");
+        perror("[flsh_error]: cd");
         log_shell("cd", "Fallo: Error de sistema en chdir", 1);
     } else {
         char cwd[PATH_MAX];
@@ -224,16 +224,16 @@ void ejecutar_cd(char *ruta) {
 // --- Función 5: MKDIR (Segurizada) ---
 void ejecutar_mkdir(char *ruta) {
     if (ruta == NULL) {
-        fprintf(stderr, "mishell: falta argumento mkdir\n");
+        fprintf(stderr, "[flsh_error]: falta argumento mkdir\n");
         log_shell("mkdir", "Error: Falta argumento", 1);
         return;
     }
  
-    // Validación JAIL
+    // Validación SandBox
     if (!validar_entorno_seguro(ruta, "mkdir")) return;
  
     if (mkdir(ruta, 0755) != 0) {
-        perror("mishell: mkdir");
+        perror("[flsh_error]: mkdir");
         log_shell("mkdir", "Fallo: No se pudo crear directorio", 1);
     } else {
         char msg[256];
@@ -245,16 +245,16 @@ void ejecutar_mkdir(char *ruta) {
 // --- Función 6: RM (Segurizada) ---
 void ejecutar_rm(char *archivo) {
     if (archivo == NULL) {
-        fprintf(stderr, "mishell: falta argumento rm\n");
+        fprintf(stderr, "[flsh_error]: falta argumento rm\n");
         log_shell("rm", "Error: Falta argumento", 1);
         return;
     }
     
-    // Validación JAIL
+    // Validación SandBox
     if (!validar_entorno_seguro(archivo, "rm")) return;
  
     if (unlink(archivo) != 0) {
-        perror("mishell: rm");
+        perror("[flsh_error]: rm");
         log_shell("rm", "Fallo: No se pudo eliminar", 1);
     } else {
         char msg[256];
@@ -266,25 +266,25 @@ void ejecutar_rm(char *archivo) {
 // --- Función 7: CP (Refactorizada con validar_entorno_seguro) ---
 void ejecutar_cp(char *origen, char *destino) {
     if (origen == NULL || destino == NULL) {
-        fprintf(stderr, "mishell: uso cp <origen> <destino>\n");
+        fprintf(stderr, "[flsh_error]: uso cp <origen> <destino>\n");
         log_shell("cp", "Error: Argumentos insuficientes", 1);
         return;
     }
  
-    // Validación JAIL para AMBOS argumentos
+    // Validación SandBox para AMBOS argumentos
     if (!validar_entorno_seguro(origen, "cp (origen)")) return;
     if (!validar_entorno_seguro(destino, "cp (destino)")) return;
  
     int fd_in = open(origen, O_RDONLY);
     if (fd_in < 0) {
-        perror("mishell: cp (origen)");
+        perror("[flsh_error]: cp (origen)");
         log_shell("cp", "Fallo: No se pudo abrir origen", 1);
         return;
     }
  
     int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0) {
-        perror("mishell: cp (destino)");
+        perror("[flsh_error]: cp (destino)");
         close(fd_in);
         log_shell("cp", "Fallo: No se pudo crear destino", 1);
         return;
@@ -296,7 +296,7 @@ void ejecutar_cp(char *origen, char *destino) {
  
     while ((bytes_leidos = read(fd_in, buffer, sizeof(buffer))) > 0) {
         if (write(fd_out, buffer, bytes_leidos) != bytes_leidos) {
-            perror("mishell: cp (error escritura)");
+            perror("[flsh_error]: cp (error escritura)");
             error_escritura = 1;
             break;
         }
@@ -317,17 +317,17 @@ void ejecutar_cp(char *origen, char *destino) {
 // --- Función 8: CAT (Segurizada) ---
 void ejecutar_cat(char *archivo) {
     if (archivo == NULL) {
-        fprintf(stderr, "mishell: falta argumento cat\n");
+        fprintf(stderr, "[flsh_error]: falta argumento cat\n");
         log_shell("cat", "Error: Falta argumento", 1);
         return;
     }
  
-    // Validación JAIL
+    // Validación SandBox
     if (!validar_entorno_seguro(archivo, "cat")) return;
  
     int fd = open(archivo, O_RDONLY); 
     if (fd < 0) {
-        perror("mishell: cat");
+        perror("[flsh_error]: cat");
         log_shell("cat", "Fallo: Archivo no encontrado", 1);
         return;
     }
@@ -337,6 +337,7 @@ void ejecutar_cat(char *archivo) {
     while ((bytes_leidos = read(fd, buffer, sizeof(buffer))) > 0) {
         write(STDOUT_FILENO, buffer, bytes_leidos);
     }
+    printf("\n");
     close(fd);
     
     char msg[256];
@@ -359,17 +360,17 @@ void ejecutar_echo(char **args) {
 // --- Función 10: GREP (Segurizada) ---
 void ejecutar_grep(char *patron, char *archivo) {
     if (patron == NULL || archivo == NULL) {
-        fprintf(stderr, "mishell: uso grep <palabra> <archivo>\n");
+        fprintf(stderr, "[flsh_error]: uso grep <palabra> <archivo>\n");
         log_shell("grep", "Error: Argumentos insuficientes", 1);
         return;
     }
  
-    // Validación JAIL
+    // Validación SandBox
     if (!validar_entorno_seguro(archivo, "grep")) return;
  
     FILE *fp = fopen(archivo, "r");
     if (fp == NULL) {
-        perror("mishell: grep");
+        perror("[flsh_error]: grep");
         log_shell("grep", "Fallo: No se pudo abrir el archivo", 1);
         return;
     }
@@ -407,8 +408,8 @@ int main() {
     char ruta_logs[PATH_MAX];
     obtener_ruta_logs(ruta_logs, sizeof(ruta_logs));
     
-    printf("--- Shell Iniciada (MODO SEGURO / JAIL) ---\n");
-    printf("Logs configurados en: %s\n", ruta_logs);
+    // printf("--- Shell Iniciada (MODO SEGURO / SandBox) ---\n");
+    // printf("Logs configurados en: %s\n", ruta_logs);
     
     while (1) {
         imprimir_prompt();
@@ -439,12 +440,12 @@ int main() {
  
         if (redir_pos != -1) {
             if (args[redir_pos + 1] == NULL) {
-                fprintf(stderr, "mishell: error de sintaxis cerca de >\n");
+                fprintf(stderr, "[flsh_error]: error de sintaxis cerca de >\n");
                 continue; 
             }
             char *archivo_destino = args[redir_pos + 1];
  
-            // VALIDACION JAIL PARA REDIRECCION
+            // VALIDACION SandBox PARA REDIRECCION
             // Evita: echo "hack" > /etc/passwd
             if (!validar_entorno_seguro(archivo_destino, "redireccion >")) {
                 // Si falla seguridad, abortamos el comando
@@ -454,7 +455,7 @@ int main() {
             stdout_backup = dup(STDOUT_FILENO);
             int fd_archivo = open(archivo_destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd_archivo < 0) {
-                perror("mishell: error redireccion");
+                perror("[flsh_error]: error redireccion");
                 continue;
             }
             dup2(fd_archivo, STDOUT_FILENO);
@@ -488,11 +489,11 @@ int main() {
             // Comandos Externos
             pid_t pid = fork();
             if (pid < 0) {
-                perror("mishell: fork");
+                perror("[flsh_error]: fork");
             } 
             else if (pid == 0) {
                 execvp(args[0], args);
-                perror("mishell: execvp");
+                perror("[flsh_error]: execvp");
                 log_shell(args[0], "Fallo: Comando externo no encontrado", 1);
                 exit(EXIT_FAILURE); 
             } 
