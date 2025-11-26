@@ -85,11 +85,64 @@ void log_shell(char *cmd, char *detalles, int es_error) {
     fclose(f);
 }
 
+// --- NUEVA FUNCIÓN DE SEGURIDAD (JAIL/SANDBOX) ---
+// Retorna 1 si es seguro proceder, 0 si hay violación de seguridad.
+int validar_entorno_seguro(char *ruta_objetivo, const char *comando) {
+    char *home = getenv("HOME");
+    if (home == NULL) {
+        log_shell((char*)comando, "SEGURIDAD: Variable HOME no definida", 1);
+        fprintf(stderr, "mishell: Variable HOME no definida (ambiente inseguro)\n");
+        return 0;
+    }
+ 
+    char ruta_resuelta[PATH_MAX];
+    char *res = realpath(ruta_objetivo, ruta_resuelta);
+ 
+    // Caso 1: La ruta NO existe aún (ej. mkdir nuevo_dir, cp a nuevo_archivo)
+    if (res == NULL) {
+        if (errno == ENOENT) {
+            // Verificamos el directorio PADRE
+            char *copia_ruta = strdup(ruta_objetivo);
+            char *dir_padre = dirname(copia_ruta);
+            char padre_resuelta[PATH_MAX];
+ 
+            // Resolvemos la ruta del padre
+            if (realpath(dir_padre, padre_resuelta) != NULL) {
+                // Chequeamos si el padre está contenido en HOME
+                if (strncmp(padre_resuelta, home, strlen(home)) == 0) {
+                    free(copia_ruta);
+                    return 1; // El padre es seguro, procedemos
+                }
+            }
+            free(copia_ruta);
+        }
+        // Si falla realpath por otra razón o el padre no es seguro:
+        char msg[512];
+        snprintf(msg, sizeof(msg), "SEGURIDAD: Ruta invalida o fuera de limites: %s", ruta_objetivo);
+        log_shell((char*)comando, msg, 1);
+        fprintf(stderr, "mishell: Acceso denegado (Jail). Ruta invalida o fuera de %s\n", home);
+        return 0;
+    }
+ 
+    // Caso 2: La ruta YA existe
+    // Verificamos que la ruta resuelta comience con la ruta del HOME
+    if (strncmp(ruta_resuelta, home, strlen(home)) != 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "SEGURIDAD: Intento de escape de HOME hacia %s", ruta_resuelta);
+        log_shell((char*)comando, msg, 1);
+        fprintf(stderr, "mishell: Acceso denegado (Jail). No puedes salir de %s\n", home);
+        return 0;
+    }
+ 
+    return 1; // Es seguro
+}
+ 
 // --- Función 1: Prompt ---
 void imprimir_prompt() {
     char cwd[1024];
     if (getcwd(cwd, sizeof(cwd)) != NULL) {
-        printf("[%s]> ", cwd);
+        // Indicamos visualmente que estamos en entorno seguro
+        printf("[SANDBOX:%s]> ", cwd); 
     } else {
         printf("> ");
     }
@@ -109,8 +162,14 @@ int parsear_comando(char *input, char **args) {
     return i;
 }
 
-// --- Función 3: LS ---
+// --- Función 3: LS (Segurizada) ---
 void ejecutar_ls(char *ruta) {
+    // Si ruta es NULL es el directorio actual, que se asume seguro si ya estamos dentro.
+    // Si se pasa argumento, hay que validarlo.
+    if (ruta != NULL) {
+        if (!validar_entorno_seguro(ruta, "ls")) return;
+    }
+ 
     char *target = (ruta == NULL) ? "." : ruta;
     DIR *d = opendir(target);
     
@@ -119,7 +178,7 @@ void ejecutar_ls(char *ruta) {
         log_shell("ls", "Fallo: Directorio no encontrado o sin permisos", 1);
         return;
     }
-
+ 
     struct dirent *dir;
     while ((dir = readdir(d)) != NULL) {
         if (dir->d_name[0] != '.') {
@@ -129,49 +188,50 @@ void ejecutar_ls(char *ruta) {
     printf("\n");
     closedir(d);
     
-    // Registro de éxito
     char msg[256];
     snprintf(msg, sizeof(msg), "Exito: Listado directorio %s", target);
     log_shell("ls", msg, 0);
 }
-
-// --- Función 4: CD ---
+ 
+// --- Función 4: CD (Refactorizada con validar_entorno_seguro) ---
 void ejecutar_cd(char *ruta) {
-    char *target = ruta;
-    if (target == NULL) {
-        target = getenv("HOME");
-        if (target == NULL) {
-            fprintf(stderr, "mishell: variable HOME no definida\n");
-            log_shell("cd", "Error: Variable HOME no definida", 1);
-            return;
-        }
-    }
-
-    if (chdir(target) != 0) {
+    char *home = getenv("HOME");
+    if (home == NULL) return; // Ya se loguea error en validar si no existe home
+ 
+    char *objetivo = (ruta == NULL) ? home : ruta;
+ 
+    // Validación JAIL centralizada
+    if (!validar_entorno_seguro(objetivo, "cd")) return;
+ 
+    if (chdir(objetivo) != 0) {
         perror("mishell: cd");
-        log_shell("cd", "Fallo: Ruta invalida", 1);
+        log_shell("cd", "Fallo: Error de sistema en chdir", 1);
     } else {
-        // Actualizar PWD
-        char cwd[1024];
-        if (getcwd(cwd, sizeof(cwd)) != NULL) {
-            static char env_var[1200]; 
-            sprintf(env_var, "PWD=%s", cwd);
-            putenv(env_var);
-        }
-        char msg[256];
-        snprintf(msg, sizeof(msg), "Exito: Cambio a %s", target);
+        char cwd[PATH_MAX];
+        getcwd(cwd, sizeof(cwd));
+        
+        // Actualizar variable de entorno PWD
+        static char env_var[PATH_MAX + 5]; 
+        sprintf(env_var, "PWD=%s", cwd);
+        putenv(env_var);
+ 
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Exito: Cambio seguro a %s", cwd);
         log_shell("cd", msg, 0);
     }
 }
-
-// --- Función 5: MKDIR ---
+ 
+// --- Función 5: MKDIR (Segurizada) ---
 void ejecutar_mkdir(char *ruta) {
     if (ruta == NULL) {
         fprintf(stderr, "mishell: falta argumento mkdir\n");
         log_shell("mkdir", "Error: Falta argumento", 1);
         return;
     }
-
+ 
+    // Validación JAIL
+    if (!validar_entorno_seguro(ruta, "mkdir")) return;
+ 
     if (mkdir(ruta, 0755) != 0) {
         perror("mishell: mkdir");
         log_shell("mkdir", "Fallo: No se pudo crear directorio", 1);
@@ -181,8 +241,8 @@ void ejecutar_mkdir(char *ruta) {
         log_shell("mkdir", msg, 0);
     }
 }
-
-// --- Función 6: RM ---
+ 
+// --- Función 6: RM (Segurizada) ---
 void ejecutar_rm(char *archivo) {
     if (archivo == NULL) {
         fprintf(stderr, "mishell: falta argumento rm\n");
@@ -190,33 +250,38 @@ void ejecutar_rm(char *archivo) {
         return;
     }
     
-    // PDF Pág 3: verificar y eliminar manualmente
+    // Validación JAIL
+    if (!validar_entorno_seguro(archivo, "rm")) return;
+ 
     if (unlink(archivo) != 0) {
         perror("mishell: rm");
-        // PDF Pág 3 (Punto 81): Casos a contemplar: archivo inexistente -> registrar en sistema_error.log
-        log_shell("rm", "Fallo: No se pudo eliminar (inexistente o permisos)", 1);
+        log_shell("rm", "Fallo: No se pudo eliminar", 1);
     } else {
         char msg[256];
         snprintf(msg, sizeof(msg), "Exito: Archivo %s eliminado", archivo);
         log_shell("rm", msg, 0);
     }
 }
-
-// --- Función 7: CP ---
+ 
+// --- Función 7: CP (Refactorizada con validar_entorno_seguro) ---
 void ejecutar_cp(char *origen, char *destino) {
     if (origen == NULL || destino == NULL) {
         fprintf(stderr, "mishell: uso cp <origen> <destino>\n");
         log_shell("cp", "Error: Argumentos insuficientes", 1);
         return;
     }
-
+ 
+    // Validación JAIL para AMBOS argumentos
+    if (!validar_entorno_seguro(origen, "cp (origen)")) return;
+    if (!validar_entorno_seguro(destino, "cp (destino)")) return;
+ 
     int fd_in = open(origen, O_RDONLY);
     if (fd_in < 0) {
         perror("mishell: cp (origen)");
         log_shell("cp", "Fallo: No se pudo abrir origen", 1);
         return;
     }
-
+ 
     int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0) {
         perror("mishell: cp (destino)");
@@ -224,11 +289,11 @@ void ejecutar_cp(char *origen, char *destino) {
         log_shell("cp", "Fallo: No se pudo crear destino", 1);
         return;
     }
-
+ 
     char buffer[1024];
     ssize_t bytes_leidos;
     int error_escritura = 0;
-
+ 
     while ((bytes_leidos = read(fd_in, buffer, sizeof(buffer))) > 0) {
         if (write(fd_out, buffer, bytes_leidos) != bytes_leidos) {
             perror("mishell: cp (error escritura)");
@@ -236,7 +301,7 @@ void ejecutar_cp(char *origen, char *destino) {
             break;
         }
     }
-
+ 
     close(fd_in);
     close(fd_out);
 
@@ -248,22 +313,25 @@ void ejecutar_cp(char *origen, char *destino) {
         log_shell("cp", msg, 0);
     }
 }
-
-// --- Función 8: CAT ---
+ 
+// --- Función 8: CAT (Segurizada) ---
 void ejecutar_cat(char *archivo) {
     if (archivo == NULL) {
         fprintf(stderr, "mishell: falta argumento cat\n");
         log_shell("cat", "Error: Falta argumento", 1);
         return;
     }
-
+ 
+    // Validación JAIL
+    if (!validar_entorno_seguro(archivo, "cat")) return;
+ 
     int fd = open(archivo, O_RDONLY); 
     if (fd < 0) {
         perror("mishell: cat");
-        log_shell("cat", "Fallo: Archivo no encontrado o sin permisos", 1);
+        log_shell("cat", "Fallo: Archivo no encontrado", 1);
         return;
     }
-
+ 
     char buffer[1024]; 
     ssize_t bytes_leidos;
     while ((bytes_leidos = read(fd, buffer, sizeof(buffer))) > 0) {
@@ -275,7 +343,7 @@ void ejecutar_cat(char *archivo) {
     snprintf(msg, sizeof(msg), "Exito: Leido %s", archivo);
     log_shell("cat", msg, 0);
 }
-
+ 
 // --- Función 9: ECHO ---
 void ejecutar_echo(char **args) {
     int i = 1;
@@ -285,54 +353,44 @@ void ejecutar_echo(char **args) {
         i++;
     }
     printf("\n");
-    // echo siempre suele tener éxito a menos que falle stdout, lo logueamos como éxito
     log_shell("echo", "Exito: Texto impreso", 0);
 }
-
-// --- Función Opcional: Implementación de grep (2 ptos extra) ---
+ 
+// --- Función 10: GREP (Segurizada) ---
 void ejecutar_grep(char *patron, char *archivo) {
-    // 1. Validación de argumentos
     if (patron == NULL || archivo == NULL) {
         fprintf(stderr, "mishell: uso grep <palabra> <archivo>\n");
         log_shell("grep", "Error: Argumentos insuficientes", 1);
         return;
     }
-
-    // 2. Abrir archivo en modo texto
-    // Usamos fopen/fgets aquí porque leer línea por línea con 'read' (syscall pura)
-    // requiere implementar un buffer complejo manualmente. fopen es estándar C.
+ 
+    // Validación JAIL
+    if (!validar_entorno_seguro(archivo, "grep")) return;
+ 
     FILE *fp = fopen(archivo, "r");
     if (fp == NULL) {
         perror("mishell: grep");
         log_shell("grep", "Fallo: No se pudo abrir el archivo", 1);
         return;
     }
-
+ 
     char linea[1024];
     int coincidencias = 0;
     int num_linea = 0;
-
-    // 3. Leer línea por línea
+ 
     while (fgets(linea, sizeof(linea), fp) != NULL) {
         num_linea++;
-        
-        // 4. Buscar el patrón en la línea actual
-        // strstr devuelve un puntero si encuentra el texto, o NULL si no.
         if (strstr(linea, patron) != NULL) {
-            // Imprimimos el número de línea (detalle pro) y el contenido
             printf("%d: %s", num_linea, linea);
-            
-            // Si la línea no terminaba en \n (última línea del archivo), lo agregamos
             if (linea[strlen(linea) - 1] != '\n') {
                 printf("\n");
             }
             coincidencias++;
         }
     }
-
+ 
     fclose(fp);
-
-    // 5. Loguear resultado
+ 
     char msg[256];
     if (coincidencias > 0) {
         snprintf(msg, sizeof(msg), "Exito: Encontradas %d coincidencias en %s", coincidencias, archivo);
@@ -341,39 +399,35 @@ void ejecutar_grep(char *patron, char *archivo) {
     }
     log_shell("grep", msg, 0);
 }
-
+ 
 // --- MAIN ---
 int main() {
-        char input[MAX_INPUT_SIZE];
+    char input[MAX_INPUT_SIZE];
     char *args[MAX_ARGS];
-
-    // Verificar logs al inicio
     char ruta_logs[PATH_MAX];
     obtener_ruta_logs(ruta_logs, sizeof(ruta_logs));
     
-    // Mensaje informativo al arrancar
-    printf("--- Shell Iniciada ---\n");
+    printf("--- Shell Iniciada (MODO SEGURO / JAIL) ---\n");
     printf("Logs configurados en: %s\n", ruta_logs);
     
     while (1) {
         imprimir_prompt();
-
+ 
         if (fgets(input, MAX_INPUT_SIZE, stdin) == NULL) {
             printf("\n");
             break; 
         }
-
-        // Eliminar el salto de línea al final si existe
+ 
         size_t len = strlen(input);
         if (len > 0 && input[len-1] == '\n') {
             input[len-1] = '\0';
         }
-
+ 
         if (parsear_comando(input, args) == 0) {
             continue;
         }
-
-        // --- MANEJO DE REDIRECCIÓN (Simplificado) ---
+ 
+        // --- MANEJO DE REDIRECCIÓN (Segurizado) ---
         int stdout_backup = -1;
         int redir_pos = -1;
         for (int k = 0; args[k] != NULL; k++) {
@@ -382,13 +436,21 @@ int main() {
                 break;
             }
         }
-
+ 
         if (redir_pos != -1) {
             if (args[redir_pos + 1] == NULL) {
                 fprintf(stderr, "mishell: error de sintaxis cerca de >\n");
                 continue; 
             }
             char *archivo_destino = args[redir_pos + 1];
+ 
+            // VALIDACION JAIL PARA REDIRECCION
+            // Evita: echo "hack" > /etc/passwd
+            if (!validar_entorno_seguro(archivo_destino, "redireccion >")) {
+                // Si falla seguridad, abortamos el comando
+                continue; 
+            }
+ 
             stdout_backup = dup(STDOUT_FILENO);
             int fd_archivo = open(archivo_destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd_archivo < 0) {
@@ -397,11 +459,11 @@ int main() {
             }
             dup2(fd_archivo, STDOUT_FILENO);
             close(fd_archivo);
-            args[redir_pos] = NULL; // Cortar argumentos
+            args[redir_pos] = NULL; // Cortamos los argumentos
         }
-
+ 
         // --- EJECUCIÓN ---
-
+ 
         if (strcmp(args[0], "exit") == 0) {
             log_shell("exit", "Exito: Shell cerrada por usuario", 0);
             break;
@@ -420,12 +482,7 @@ int main() {
         else if (strcmp(args[0], "cp") == 0) ejecutar_cp(args[1], args[2]);
         else if (strcmp(args[0], "cat") == 0) ejecutar_cat(args[1]);
         else if (strcmp(args[0], "echo") == 0) ejecutar_echo(args);
-
-        // --- NUEVO COMANDO GREP ---
-        else if (strcmp(args[0], "grep") == 0) {
-            // args[1] es el patrón, args[2] es el archivo
-            ejecutar_grep(args[1], args[2]);
-        }
+        else if (strcmp(args[0], "grep") == 0) ejecutar_grep(args[1], args[2]);
         
         else {
             // Comandos Externos
@@ -435,18 +492,13 @@ int main() {
             } 
             else if (pid == 0) {
                 execvp(args[0], args);
-                // Si llega aqui, falló
                 perror("mishell: execvp");
-                // Importante: No podemos usar log_shell aquí de forma segura si el padre también escribe, 
-                // pero para este TP simple es aceptable o el padre puede detectar el fallo via wait status.
-                // Sin embargo, como el hijo muere, intentamos escribir antes de morir:
                 log_shell(args[0], "Fallo: Comando externo no encontrado", 1);
                 exit(EXIT_FAILURE); 
             } 
             else {
                 int status;
                 wait(&status);
-                // Opcional: Loguear ejecución externa en el padre
                 if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                      log_shell(args[0], "Exito: Comando externo ejecutado", 0);
                 } else {
@@ -454,7 +506,7 @@ int main() {
                 }
             }
         }
-
+ 
         // Restaurar salida
         if (stdout_backup != -1) {
             fflush(stdout);
@@ -462,6 +514,6 @@ int main() {
             close(stdout_backup);
         }
     }
-
+ 
     return 0;
 }
