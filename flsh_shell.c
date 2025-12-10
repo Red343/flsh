@@ -151,6 +151,20 @@ int parsear_comando(char *input, char **args) {
     return i;
 }
 
+// --- Función Auxiliar: Confirmación de Usuario ---
+int confirmar_accion(const char *mensaje) {
+    printf("%s (s/n): ", mensaje);
+    char respuesta[10];
+    // Leemos la entrada del usuario
+    if (fgets(respuesta, sizeof(respuesta), stdin) != NULL) {
+        // Aceptamos 's' o 'S' como sí
+        if (respuesta[0] == 's' || respuesta[0] == 'S') {
+            return 1; // Confirmado
+        }
+    }
+    return 0; // Rechazado
+}
+
 // --- Comandos Internos ---
 
 void ejecutar_ls(char *ruta) {
@@ -198,8 +212,16 @@ void ejecutar_mkdir(char *ruta) {
 void ejecutar_rm(char *archivo) {
     if (!archivo) { fprintf(stderr, "rm: falta argumento\n"); return; }
     if (!validar_entorno_seguro(archivo, "rm")) return;
+
+    char msg[512];
+    snprintf(msg, sizeof(msg), "ALERTA: Vas a eliminar '%s'. ¿Estás seguro?", archivo);
     
-    // REQUISITO PDF: verificar y loguear "archivo inexistente"
+    if (!confirmar_accion(msg)) {
+        printf("Operación cancelada.\n");
+        log_shell("rm", "Cancelado por el usuario", 0);
+        return;
+    }
+
     if (unlink(archivo) != 0) reportar_error_sistema("rm");
     else log_shell("rm", "Archivo eliminado", 0);
 }
@@ -207,21 +229,37 @@ void ejecutar_rm(char *archivo) {
 void ejecutar_cp(char *origen, char *destino) {
     if (!origen || !destino) { fprintf(stderr, "cp: faltan argumentos\n"); return; }
     if (!validar_entorno_seguro(origen, "cp in") || !validar_entorno_seguro(destino, "cp out")) return;
- 
+
+    // Verificar si podemos abrir el origen antes de preguntar nada
     int fd_in = open(origen, O_RDONLY);
     if (fd_in < 0) { reportar_error_sistema("cp (origen)"); return; }
-    
+
+    // --- NUEVO: Verificar si destino existe para pedir confirmación ---
+    struct stat st;
+    if (stat(destino, &st) == 0) { // Si stat retorna 0, el archivo existe
+        char msg[512];
+        snprintf(msg, sizeof(msg), "ALERTA: El archivo '%s' ya existe. ¿Sobrescribir?", destino);
+        
+        if (!confirmar_accion(msg)) {
+            printf("Copia cancelada.\n");
+            close(fd_in); // Importante: cerrar el origen que abrimos
+            log_shell("cp", "Cancelado por usuario (sobrescritura)", 0);
+            return;
+        }
+    }
+    // ------------------------------------------------------------------
+
     int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0) { reportar_error_sistema("cp (destino)"); close(fd_in); return; }
- 
+
     char buffer[1024];
     ssize_t n;
     while ((n = read(fd_in, buffer, sizeof(buffer))) > 0) write(fd_out, buffer, n);
- 
+
     close(fd_in); close(fd_out);
     log_shell("cp", "Copia exitosa", 0);
 }
- 
+
 void ejecutar_cat(char *archivo) {
     if (!archivo) { fprintf(stderr, "cat: falta argumento\n"); return; }
     if (!validar_entorno_seguro(archivo, "cat")) return;
