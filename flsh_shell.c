@@ -524,8 +524,59 @@ void ejecutar_grep(char *patron, char *archivo) {
     char msg[64]; snprintf(msg, 64, "Coincidencias: %d", count);
     log_shell("grep", msg, "INFO");
 }
-// --- MAIN: Bucle Principal de Ejecución (REPL) ---
 
+// --- Comando Built-in: shutdown (Apagar Sistema) ---
+
+/*
+ * Inicia la secuencia de apagado del sistema operativo.
+ * Funcionalidad:
+ * 1. Confirmación Crítica: Utiliza 'confirmar_accion' para evitar apagados accidentales.
+ * 2. Auditoría: Registra el evento con nivel "CRITICAL".
+ * 3. Persistencia de Datos: Ejecuta 'sync()' para asegurar que los buffers de disco se guarden.
+ * 4. Ejecución Privilegiada: Intenta invocar el comando del sistema usando 'sudo' primero,
+ * ya que un usuario estándar no tiene permisos para apagar el hardware.
+ */
+void ejecutar_shutdown() {
+    // 1. Capa de Seguridad Interactiva
+    if (!confirmar_accion("PELIGRO: Esto apagará el equipo completo. ¿Estás seguro?")) {
+        log_shell("shutdown", "Cancelado por usuario", "INFO");
+        return;
+    }
+
+    log_shell("shutdown", "Iniciando secuencia de apagado...", "CRITICAL");
+    
+    // 2. Sincronización de discos (Buena práctica antes de apagar)
+    sync(); 
+
+    // 3. Ejecución del comando de sistema
+    // Hacemos fork para manejar el error si el comando 'shutdown' no existe o falla.
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Proceso Hijo
+        
+        // Opción A: Intentar con sudo (lo más probable para usuario normal)
+        char *args_sudo[] = {"sudo", "shutdown", "-h", "now", NULL};
+        execvp("sudo", args_sudo);
+        
+        // Opción B: Si sudo falla (o no existe), intentar directo (por si ya somos root)
+        // Si execvp anterior funcionó, esta línea nunca se ejecuta.
+        char *args_direct[] = {"shutdown", "-h", "now", NULL};
+        execvp("shutdown", args_direct);
+
+        // Si llegamos aquí, ambos fallaron
+        reportar_error_sistema("shutdown (fallo al invocar comando de sistema)");
+        exit(1);
+    } else {
+        // Proceso Padre: Esperamos a ver si el comando se ejecutó
+        int status;
+        wait(&status);
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            fprintf(stderr, "[flsh_error] shutdown: No se pudo apagar (¿Faltan permisos sudo?).\n");
+        }
+    }
+}
+
+// --- MAIN: Bucle Principal de Ejecución (REPL) ---
 /*
  * Punto de entrada y orquestador del Shell. Implementa el ciclo de vida "Read-Eval-Print Loop".
  * Arquitectura y Flujo:
@@ -591,6 +642,7 @@ int main() {
              char cwd[1024]; getcwd(cwd, sizeof(cwd)); printf("%s\n", cwd);
              log_shell("pwd", "Exito", "INFO");
         }
+        else if (strcmp(args[0], "shutdown") == 0) ejecutar_shutdown();
         else if (strcmp(args[0], "ls") == 0) ejecutar_ls(args[1]);
         else if (strcmp(args[0], "cd") == 0) ejecutar_cd(args[1]);
         else if (strcmp(args[0], "mkdir") == 0) ejecutar_mkdir(args[1]);
