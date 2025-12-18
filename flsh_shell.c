@@ -246,7 +246,7 @@ void imprimir_prompt() {
     // Intentamos recuperar el directorio de trabajo actual
     if (getcwd(cwd, sizeof(cwd)) != NULL) {
         // Personalización del prompt (Requisito de "Tema/Enfoque propio")
-        printf("[Úsame: %s]> ", cwd); 
+        printf("[%s]> ", cwd); 
     } else {
         // Fallback en caso de error de sistema al leer la ruta
         printf("> ");
@@ -393,8 +393,16 @@ void ejecutar_rm(char *archivo) {
     }
 
     // Capa 3: Ejecución (Syscall unlink)
-    if (unlink(archivo) != 0) reportar_error_sistema("rm");
-    else log_shell("rm", "Archivo eliminado", "WARNING"); // Warning porque es destructivo
+    if (unlink(archivo) != 0) {
+        reportar_error_sistema("rm"); // Reporta si hubo error de permisos o ruta
+    } else {
+        char detalles_log[512];
+        // Formateamos el mensaje incluyendo el nombre del archivo
+        snprintf(detalles_log, sizeof(detalles_log), "Archivo eliminado: %s", archivo);
+        
+        // Enviamos el mensaje detallado al sistema de logs
+        log_shell("rm", detalles_log, "WARNING"); 
+    }
 }
  
 // --- Comando Built-in: cp (Copy File) ---
@@ -417,39 +425,37 @@ void ejecutar_rm(char *archivo) {
 void ejecutar_cp(char *origen, char *destino) {
     if (!origen || !destino) { fprintf(stderr, "cp: faltan argumentos\n"); return; }
     
-    // Verificamos seguridad en ambos extremos: no leer de /etc, no escribir en /bin
     if (!validar_entorno_seguro(origen, "cp in") || !validar_entorno_seguro(destino, "cp out")) return;
 
     int fd_in = open(origen, O_RDONLY);
     if (fd_in < 0) { reportar_error_sistema("cp (origen)"); return; }
     
-    // --- Bloque de Prevención de Accidentes ---
     struct stat st;
-    // Si stat devuelve 0, el archivo destino existe
     if (stat(destino, &st) == 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "ALERTA: '%s' ya existe. ¿Sobrescribir?", destino);
-        // Solicitamos confirmación interactiva antes de truncar el archivo
         if (!confirmar_accion(msg)) {
             close(fd_in);
-            log_shell("cp", "Cancelado (sobrescritura)", "INFO");
+            char cancel_msg[1024];
+            snprintf(cancel_msg, sizeof(cancel_msg), "Cancelado (sobrescritura): %s", destino);
+            log_shell("cp", cancel_msg, "INFO");
             return;
         }
     }
 
-    // Abrimos destino: O_WRONLY (escribir), O_CREAT (crear), O_TRUNC (borrar contenido previo)
-    // Permisos 0644: Usuario(rw), Grupo(r), Otros(r)
     int fd_out = open(destino, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0) { reportar_error_sistema("cp (destino)"); close(fd_in); return; }
 
-    // --- Bucle de Copia (Core) ---
     char buffer[1024];
     ssize_t n;
-    // Leemos del origen al buffer y escribimos del buffer al destino
     while ((n = read(fd_in, buffer, sizeof(buffer))) > 0) write(fd_out, buffer, n);
 
     close(fd_in); close(fd_out);
-    log_shell("cp", "Copia exitosa", "INFO");
+
+    char detalles_log[1024];
+    // Registramos la ruta de origen y la de destino
+    snprintf(detalles_log, sizeof(detalles_log), "Copia exitosa: %s -> %s", origen, destino);
+    log_shell("cp", detalles_log, "INFO");
 }
  
 // --- Comando Built-in: cat (Concatenate/Display) ---
