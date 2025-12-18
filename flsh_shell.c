@@ -140,8 +140,11 @@ void reportar_error_sistema(char *cmd) {
 int confirmar_accion(const char *mensaje) {
     printf("%s (s/n): ", mensaje);
     char respuesta[10];
-    // fgets es seguro porque limitamos la lectura a sizeof(respuesta)
     if (fgets(respuesta, sizeof(respuesta), stdin) != NULL) {
+        if (strchr(respuesta, '\n') == NULL) {
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF);
+        }
         if (respuesta[0] == 's' || respuesta[0] == 'S') return 1;
     }
     return 0;
