@@ -11,7 +11,7 @@ Esto permite que la shell sea "portable" y utilizada por usuarios estándar sin 
 
 **Esta desición fue tomada en el caso de que dentro del LFS no pudieramos, o sea muy complicado el crear un usuario dentro del LFS que usara solo flsh**
 
-## Sistema de Auditoría y Trazabilidad (Logging)
+## Sistema de Auditoría y Trazabilidad (Logging) implementado el 08/12
 
 El Shell incorpora un motor de logging avanzado diseñado para entornos de seguridad y administración remota. A diferencia de un logger simple, este módulo implementa:
 
@@ -25,7 +25,7 @@ El Shell incorpora un motor de logging avanzado diseñado para entornos de segur
 
 **El punto de hacer los loggins más detallados fue para darle ese enfoque de seguridad por sobre la shell ya construida**
 
-## Gestión de Errores de Sistema (errno)
+## Gestión de Errores de Sistema (errno)  implementado el 08/12
 
 El Shell implementa una rutina unificada para el reporte de fallos en llamadas al sistema (syscalls). En lugar de imprimir errores genéricos, el sistema:
 
@@ -36,7 +36,7 @@ El Shell implementa una rutina unificada para el reporte de fallos en llamadas a
 
 **Gestion de errores necesaria para la entrega del trabajo, con cuidado de cargar correctamente dentro de sistema_error.log**
 
-## Prevención de Accidentes (Safety Interlocks)
+## Prevención de Accidentes (Safety Interlocks)  implementado el 08/12
 
 Siguiendo los principios de diseño de sistemas críticos, el Shell incorpora barreras de confirmación para comandos irreversibles:
 
@@ -46,7 +46,7 @@ Siguiendo los principios de diseño de sistemas críticos, el Shell incorpora ba
 
 **Para completar el enfoque de seguridad se tomó en cuenta la sugerencia de hacer una política de confirmación al manejar archivos, especificamente al moverlos o eliminarlos**
 
-## Sandboxing de Sistema de Archivos
+## Sandboxing de Sistema de Archivos implementado el 11/12
 
 Para garantizar la integridad del sistema anfitrión y prevenir modificaciones accidentales o maliciosas fuera del espacio de usuario, el Shell implementa un **Sandbox estricto**:
 
@@ -66,7 +66,7 @@ El Shell no solo restringe el acceso, sino que implementa un protocolo activo de
 
 **Funcionalidad mejorada para los registros de auditoría, para enfatizar el enfoque de sandbox del proyecto**
 
-## Interfaz de Usuario (Prompt Dinámico)
+## Interfaz de Usuario (Prompt Dinámico) implementado el 28/11
 
 El Shell implementa una interfaz de línea de comandos (CLI) contextual:
 
@@ -76,7 +76,7 @@ El Shell implementa una interfaz de línea de comandos (CLI) contextual:
 **Prompt de solicitud de entrada, obligatorio**
 
 ## Comandos
-### Comando Interno: ls
+### Comando Interno: ls implementado el 28/11
 
 Se ha desarrollado una implementación propia del comando de listado, prescindiendo de llamadas al sistema externo (`system("ls")`).
 
@@ -85,62 +85,62 @@ Se ha desarrollado una implementación propia del comando de listado, prescindie
 - **Funcionalidad:** Soporta listado del directorio actual (por defecto) o rutas absolutas/relativas, aplicando filtros para ocultar archivos de sistema (dotfiles).
 
 
-### Comando Interno: cd
+### Comando Interno: cd implementado el 28/11
 Módulo encargado de la navegación por el sistema de archivos.
 - **Implementación Nativa:** Utiliza la syscall `chdir` en lugar de invocar subprocesos, permitiendo que el cambio de directorio persista en el Shell.
 - **Consistencia de Entorno:** Cumpliendo con los requisitos del TP, cada cambio de directorio actualiza dinámicamente la variable de entorno `PWD` (`putenv`). Esto garantiza que los procesos lanzados posteriormente hereden la ruta de trabajo correcta.
 - **Seguridad:** Incorpora validación previa de rutas para evitar salir del área designada por el Sandbox.
 
 
-### Comando Interno: mkdir
+### Comando Interno: mkdir implementado el 28/11
 Implementación segura para la creación de directorios.
 - **Lógica Directa:** Utiliza la syscall `mkdir` definiendo explícitamente los permisos de acceso (`0755` - lectura y ejecución pública, escritura privada).
 - **Protección:** Validada por el *Sandbox*, impide la creación de carpetas fuera de la jerarquía del usuario, previniendo la contaminación de directorios del sistema.
 - **Robustez:** Maneja errores comunes como directorio ya existente (`EEXIST`) o ruta inválida.
 
 
-### Comando Interno: cp
+### Comando Interno: cp implementado el 28/11
 Implementación de bajo nivel para la duplicación de archivos.
 - **Mecanismo I/O:** Prescinde de funciones de alto nivel, implementando un bucle de transferencia directa mediante syscalls `read`/`write` y un buffer intermedio. Esto permite copiar cualquier tipo de archivo (texto o binario).
 - **Seguridad de Datos:** Incorpora lógica de detección de conflictos. Antes de escribir, verifica la existencia del destino (`stat`); si el archivo existe, el Shell pausa la ejecución y solicita autorización para sobrescribir.
 - **Sandboxing Dual:** Valida tanto la ruta de lectura como la de escritura, asegurando que la operación de copia se mantenga estrictamente dentro de los límites del usuario.
 
 
-### Comando Interno: cat
+### Comando Interno: cat implementado el 29/11
 Visualizador de contenido implementado mediante I/O directa.
 - **Eficiencia de Memoria:** Utiliza un buffer de tamaño fijo para leer y mostrar el archivo por fragmentos ("chunks"). Esto permite visualizar archivos muy grandes sin necesidad de cargarlos completamente en la memoria RAM.
 - **Salida Directa:** Emplea la syscall `write` sobre el descriptor `STDOUT_FILENO`, lo que permite una salida rápida y sin el overhead de formateo de librerías estándar.
 - **Privacidad:** Integrado con el sistema de seguridad, impide que un usuario utilice el shell para leer archivos de configuración del sistema operativo fuera de su directorio personal.
 
 
-### Comando Opcional: grep (Análisis de Texto)
+### Comando Opcional: grep (Análisis de Texto) implementado el 30/11
 Funcionalidad extendida para la búsqueda de cadenas dentro de archivos (Feature opcional +2 ptos).
 - **Motor de Búsqueda Propio:** Implementación nativa de búsqueda lineal utilizando la función `strstr` de la librería estándar de C, sin dependencias externas.
 - **Manejo de Streams:** Utiliza lectura bufferizada orientada a líneas (`fgets`) para procesar archivos de texto de manera eficiente.
 - **Integración de Seguridad:** Mantiene la coherencia con el resto del shell aplicando las mismas restricciones de *Sandbox* para evitar la lectura de logs del sistema o archivos protegidos fuera del `HOME`.
 - **Logging Enriquecido:** El sistema registra en la bitácora no solo la ejecución del comando, sino la cantidad exacta de coincidencias encontradas ("hits").
 
-### Comando Interno: echo
+### Comando Interno: echo implementado el 28/11
 Utilidad fundamental para la visualización de texto y prueba de descriptores de salida.
 - **Implementación Inline:** Integrado directamente en el bucle principal (`main`) para máxima velocidad de respuesta.
 - **Iteración de Argumentos:** Recorre y concatena los argumentos recibidos separándolos por espacios, finalizando con un salto de línea estándar.
 - **Soporte de Redirección:** Gracias a la arquitectura del Shell, `echo` puede utilizarse para crear o escribir archivos de texto simple (ej. `echo hola mundo > saludo.txt`). Al manipular los *file descriptors* antes de la ejecución del comando, la salida de `printf` es capturada transparentemente por el archivo destino.
 
-### Comando Interno: rm (Remove)
+### Comando Interno: rm (Remove) implementado el 29/11
 Gestor de eliminación segura de archivos.
 - **Implementación:** Utiliza la syscall `unlink()` para eliminar la referencia del inodo.
 - **Interlock de Seguridad:** Antes de proceder, invoca la función `confirmar_accion()`. Si el usuario no escribe explícitamente 's', la operación se aborta.
 - **Auditoría:** Registra en `shell.log` con nivel WARNING si el archivo fue borrado, o INFO si el usuario canceló la operación.
 
-### Comando Interno: pwd (Print Working Directory)
+### Comando Interno: pwd (Print Working Directory) implementado el 28/11
 - **Función:** Muestra la ruta absoluta actual.
 - **Lógica:** Aunque el prompt ya muestra la ruta, este comando permite obtenerla limpia para scripts o verificaciones. Utiliza `getcwd()` y la imprime en salida estándar.
 
-### Comando Interno: exit
+### Comando Interno: exit implementado el 28/11
 - **Función:** Cierre controlado de la sesión.
 - **Requisito de Trazabilidad:** Antes de terminar el proceso con `exit(0)`, escribe una entrada final en el log ("Sesión finalizada"), permitiendo calcular la duración de la sesión del usuario en auditorías posteriores.
 
-## Motor de Redirección de I/O
+## Motor de Redirección de I/O implementado el 29/11
 
 El Shell soporta la redirección de salida estándar (`>`), permitiendo volcar el resultado de cualquier comando a un archivo en lugar de la pantalla.
 
@@ -155,7 +155,7 @@ A diferencia de shells que parsean toda la línea, nuestra implementación manip
     * El comando ejecutado (sea `echo`, `ls` o un externo) escribe en "pantalla" sin saber que en realidad está escribiendo en el disco.
 5.  **Restauración:** Al finalizar, se utiliza `dup2` con el backup para devolver el control a la terminal del usuario.
 
-## Arquitectura de Ejecución de Procesos (Externos)
+## Arquitectura de Ejecución de Procesos (Externos) implementado el 30/11
 
 Para los comandos que no son internos (como `vim`, `nano`, `top` o scripts de usuario), el Shell implementa el ciclo de vida estándar de procesos UNIX, gestionando manualmente la memoria y el control de flujo.
 
@@ -171,3 +171,9 @@ Para los comandos que no son internos (como `vim`, `nano`, `top` o scripts de us
     * Si tiene éxito, la imagen de memoria del hijo es reemplazada por el nuevo programa.
     * Si falla (ej. comando no existe), se imprime el error y se fuerza la salida con `exit(127)`.
 5.  **Sincronización (Wait):** El proceso padre utiliza `wait(&status)` para bloquearse hasta que el hijo termine. Esto evita la creación de procesos "zombies" y permite registrar en el log si el programa externo terminó exitosamente o con error.
+
+
+### Participantes y contribuciones:
+* Main REPL: Igor Dedoff
+* Comandos internos: Ivan Paredes
+* Comandos externos y aplicación de las funciones de seguridad: Federico Recalde
